@@ -2,30 +2,25 @@ package middleware
 
 import (
 	"fmt"
+	"god-dev/controllers"
 	"os"
-
-	"go-be/controllers"
 
 	jwtware "github.com/gofiber/contrib/jwt"
 	"github.com/gofiber/fiber/v2"
 	"github.com/golang-jwt/jwt/v5"
 )
 
-var udid string
-
-func ReqAuth() func(*fiber.Ctx) error {
-	fmt.Println("init id" + udid)
+func RequestAuth() func(*fiber.Ctx) error {
 	return jwtware.New(jwtware.Config{
-		SigningKey:     jwtware.SigningKey{Key: []byte(os.Getenv("JWT_SECRET"))},
-		SuccessHandler: validatorRedis,
-		ErrorHandler:   errNext,
+		SigningKey:   jwtware.SigningKey{Key: []byte(os.Getenv("JWT_SECRET"))},
+		ErrorHandler: errNext,
 	})
 }
 
-func RefAuth() func(*fiber.Ctx) error {
+func RefreshAuth() func(*fiber.Ctx) error {
 	return jwtware.New(jwtware.Config{
 		SigningKey:     jwtware.SigningKey{Key: []byte(os.Getenv("JWT_REFRESH"))},
-		SuccessHandler: tokenRefresh,
+		SuccessHandler: resendToken,
 	})
 }
 
@@ -34,52 +29,34 @@ func errNext(c *fiber.Ctx, err error) error {
 	return nil
 }
 
-func tokenRefresh(c *fiber.Ctx) error {
-	getToken := controllers.GetTokenRedis("access_token:" + udid)
-	if getToken != "" {
-		fmt.Println("have token:" + getToken)
+func resendToken(c *fiber.Ctx) error {
+	user := c.Locals("user").(*jwt.Token)
+	claims := user.Claims.(jwt.MapClaims)
+	uid := fmt.Sprintf("%v", claims["uid"])
+	getAccessToken := controllers.GetToken("access_token:" + uid)
+
+	if getAccessToken != "" {
+		fmt.Println("have token: \n" + getAccessToken + "\n")
 		c.Next()
 		return nil
-	} else {
-		user := c.Locals("user").(*jwt.Token)
-		claims := user.Claims.(jwt.MapClaims)
-		id := fmt.Sprintf("%v", claims["id"])
+	}
 
-		claims = jwt.MapClaims{
-			"id": id,
-		}
-		access_token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
-		act, err := access_token.SignedString([]byte(os.Getenv("JWT_SECRET")))
-
-		controllers.SetActTokenRedis("access_token:"+udid, act)
-
-		if err != nil {
-			return c.Status(503).JSON(fiber.Map{
-				"message": "Error : Refresh password error.",
-				"status":  "error",
-				"error":   err.Error(),
-			})
-		}
-		fmt.Println("refresh token:" + act)
-		c.Next()
+	acc_token, err := controllers.CreateToken(uid, "JWT_SECRET")
+	if err != nil {
 		return c.Status(503).JSON(fiber.Map{
-			"message": "Warning : Token is refresh..",
-			"status":  "warning",
-			"token":   act,
+			"status":  "error",
+			"message": "Error : Refresh password invalid.",
+			"error":   err.Error(),
 		})
-
 	}
-}
+	fmt.Println("have token: \n" + acc_token + "\n")
+	controllers.SetAccessToken("access_token:"+uid, acc_token)
 
-func validatorRedis(c *fiber.Ctx) error {
-	type redisId struct {
-		Id string `json:"id"`
-	}
-	var id redisId
-	c.BodyParser(&id)
-	udid = id.Id
-	fmt.Println(udid)
 	c.Next()
-	return nil
+	return c.Status(200).JSON(fiber.Map{
+		"status":  "warning",
+		"message": "Warning : Refresh token.",
+		"token":   controllers.GetToken("access_token:" + uid),
+	})
 
 }

@@ -1,150 +1,174 @@
-package controllers //model : go-be
+package controllers
 
 import (
 	"context"
-	"go-be/database"
-	m "go-be/models"
+	"god-dev/database"
+	"god-dev/models"
 	"os"
-	"time"
-
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/gofiber/fiber/v2"
 	"github.com/golang-jwt/jwt"
 	"golang.org/x/crypto/bcrypt"
 )
 
-func Regis(c *fiber.Ctx) error {
-	db := database.DBConn
-	var regisBody m.User
+// Functions register - Authen routher.
+func Regis(c *fiber.Ctx) error { // Routes -> http://127.0.0.1:3000/api/auth/register
 
+	// Connect Database.
+	db := database.DBConn
+
+	// Recive body parser register routes.
+	var regisBody models.User
 	err := c.BodyParser(&regisBody)
-	if err != nil {
+	if err != nil { // Case : Input json data invalid.
 		return c.Status(503).JSON(fiber.Map{
-			"message": "Error : Register body has invalid.",
 			"status":  "error",
+			"message": "Error : Regid body invalid.",
 			"error":   err.Error(),
 		})
 	}
 
-	var userExists m.User
+	// Checked user exists.
+	var userExists models.User
 	result := db.Find(&userExists, "email = ?", strings.TrimSpace(regisBody.Email))
 	if result.RowsAffected != 0 {
-		return c.Status(503).JSON(fiber.Map{
-			"massage": "Error : Email exists.",
+		return c.Status(503).JSON(fiber.Map{ // Case : Input email id exists.
 			"status":  "error",
+			"message": "Error : Email exists.",
 		})
 	}
 
-	passHash, err := bcrypt.GenerateFromPassword([]byte(regisBody.Password), 10)
+	// Hash password
+	hash, err := bcrypt.GenerateFromPassword([]byte(regisBody.Password), 10)
 	if err != nil {
-		c.Status(503).JSON(fiber.Map{
-			"message": "Error : Password has invalid.",
+		c.Status(503).JSON(fiber.Map{ // Case : Hash password invalid.
 			"status":  "error",
+			"message": "Error : Invalid password hashing.",
 			"error":   err.Error(),
 		})
 	}
 
-	userRegisted := m.User{
+	// Create register data.
+	userRegisted := models.User{
 		Email:    regisBody.Email,
-		Password: "secretpass:" + string(passHash),
-		Status:   "active",
-		Role:     "admin",
+		Password: "secretpass:" + string(hash),
+		Name:     regisBody.Name,
+		Phone:    regisBody.Phone,
+		Age:      regisBody.Age,
+		Rank:     regisBody.Rank,
+		Status:   "nactive",
+		Role:     "user",
 	}
 
+	// Insert register data into database.
 	db.Create(&userRegisted)
+
+	// Return Status200, Json data
 	return c.Status(200).JSON(fiber.Map{
-		"massage": "Seccess : Register success.",
-		"status":  "seccess",
-		"newuser": userRegisted,
+		"status":  "success",
+		"massage": "User register success",
+		"detail":  userRegisted,
 	})
 }
 
-func Login(c *fiber.Ctx) error {
+// Functions register - Authen login.
+func Login(c *fiber.Ctx) error { // Routes -> http://127.0.0.1:3000/api/auth/login
+
+	// Connect Database.
 	db := database.DBConn
 
-	type loginRequest struct {
-		Email    string `json:"email"`
-		Password string `json:"password"`
-	}
-
-	var loginBody loginRequest
+	// Recive body parser register routes.
+	var loginBody models.RequestLogin
 	err := c.BodyParser(&loginBody)
-	if err != nil {
+	if err != nil { // Case : Input json data invalid.
 		return c.Status(503).JSON(fiber.Map{
-			"message": "Error : Logging body has some in invalid.",
 			"status":  "error",
+			"message": "Error : Logging body invalid.",
 			"error":   err.Error(),
 		})
 	}
 
-	var userSelect m.User
-	selectResult := db.Find(&userSelect, "email = ?", strings.TrimSpace(loginBody.Email))
-	if selectResult.RowsAffected == 0 {
+	// Checked email address.
+	var user models.User
+	result := db.Find(&user, "email = ?", strings.TrimSpace(loginBody.Email))
+	if result.RowsAffected == 0 { // Case : can't find email in database.
 		return c.Status(503).JSON(fiber.Map{
-			"message": "Error : Email has invalid.",
 			"status":  "error",
+			"message": "Error : Email invalid.",
 		})
 	}
 
-	dwarfsPass := strings.Split(userSelect.Password, ":")[1:][0]
-	err = bcrypt.CompareHashAndPassword([]byte(dwarfsPass), []byte(loginBody.Password))
-	if err != nil {
+	// Compare password.
+	splitPass := strings.Split(user.Password, ":")[1:][0]
+	err = bcrypt.CompareHashAndPassword([]byte(splitPass), []byte(loginBody.Password))
+
+	if err != nil { // Case : Input password invalid.
 		return c.Status(503).JSON(fiber.Map{
+			"status":  "error",
 			"message": "Error : Compare password error.",
-			"status":  "error",
 			"error":   err.Error(),
 		})
 	}
 
-	udid := strconv.Itoa(int(userSelect.ID))
+	// Convert to string user.ID.
+	udid := strconv.Itoa(int(user.ID))
 
-	claims := jwt.MapClaims{
-		"id":     userSelect.ID,
-		"email":  userSelect.Email,
-		"status": userSelect.Status,
-		"role":   userSelect.Role,
-		"exp":    time.Now().Add(time.Minute * 1).Unix(),
+	// Create access token then save "JWT_SECRET" in .env file
+	acc_token, err := CreateToken(udid, "JWT_SECRET")
+	if err != nil {
+		c.Status(503).JSON(fiber.Map{ // Case : Create access token invalid.
+			"status":  "error",
+			"message": "Error : Create access token  error.",
+			"error":   err.Error(),
+		})
 	}
-	access_token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
-	act, err := access_token.SignedString([]byte(os.Getenv("JWT_SECRET")))
-	SetActTokenRedis("access_token:"+udid, act)
-	SetActTokenRedis("id_user:"+udid, udid)
-	SetActTokenRedis("email_user:"+udid, userSelect.Email)
-	SetActTokenRedis("status_user:"+udid, userSelect.Status)
-	SetActTokenRedis("role_user:"+udid, userSelect.Role)
+	// Save access token to redis server -> key:access_toekn:udid, val:acc_token
+	SetAccessToken("access_token:"+udid, acc_token)
 
-	claims = jwt.MapClaims{
-		"id":  userSelect.ID,
-		"exp": time.Now().Add(time.Hour * 24 * 7).Unix(),
+	// Create refresh token then save "JWT_REFRESH" in .env file
+	rfh_token, err := CreateToken(udid, "JWT_REFRESH")
+	if err != nil {
+		c.Status(503).JSON(fiber.Map{ // Case : Create refresh token invalid.
+			"status":  "error",
+			"message": "Error : Create refresh token error.",
+			"error":   err.Error(),
+		})
 	}
-	refresh_token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
-	rft, err := refresh_token.SignedString([]byte(os.Getenv("JWT_REFRESH")))
-	SetRftTokenRedis("refresh_token:"+udid, rft)
+	// Save refresh token to redis server -> key:refresh_token:udid, val:rfh_token
+	SetRefreshToken("refresh_token:"+udid, rfh_token)
 
+	// Return Status200, json data
 	return c.Status(200).JSON(fiber.Map{
-		"message":       "Success : Login success.",
 		"status":        "success",
-		"id":            udid,
-		"access_token":  GetTokenRedis("access_token:" + udid),
-		"refresh_token": GetTokenRedis("refresh_token:" + udid),
+		"message":       "Success : Logging in success.",
+		"user":          udid,
+		"token_access":  GetToken("access_token:" + udid),
+		"token_refresh": GetToken("refresh_token:" + udid),
 	})
 }
 
-func SetActTokenRedis(key string, token string) {
-	rd := database.RDConn
-	ctx := context.Background()
-	rd.Set(ctx, key, token, time.Minute*1).Err()
+func CreateToken(udid string, env string) (string, error) {
+	cliams := jwt.MapClaims{"uid": udid}
+	token := jwt.NewWithClaims(jwt.SigningMethodHS256, cliams)
+	return token.SignedString([]byte(os.Getenv("env")))
 }
 
-func SetRftTokenRedis(key string, token string) {
+func SetAccessToken(key string, token string) {
 	rd := database.RDConn
 	ctx := context.Background()
-	rd.Set(ctx, key, token, 0).Err()
+	rd.Set(ctx, key, token, time.Hour*2)
 }
 
-func GetTokenRedis(key string) string {
+func SetRefreshToken(key string, token string) {
+	rd := database.RDConn
+	ctx := context.Background()
+	rd.Set(ctx, key, token, 0)
+}
+
+func GetToken(key string) string {
 	rd := database.RDConn
 	ctx := context.Background()
 	val, _ := rd.Get(ctx, key).Result()

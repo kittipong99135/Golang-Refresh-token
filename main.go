@@ -1,8 +1,8 @@
-package main //model:go-be
+package main
 
 import (
-	"go-be/database"
-	"go-be/routes"
+	"god-dev/database"
+	"god-dev/routes"
 
 	"github.com/gofiber/fiber/v2"
 	"github.com/gofiber/fiber/v2/middleware/cors"
